@@ -1,3 +1,12 @@
+Maintainer: Shawn C[a.k.a "citypw"], citypw@gmail.com
+
+Thanks to:
+
+- [PaX/Grsecurity](http://grsecurity.net/)
+
+Copyright (c) TYA infotech ltd http://tya.company/
+
+
 # [PoC: PaX for Android](https://github.com/hardenedlinux/armv7-nexus7-grsec)
 
 This project is a PoC to proved Android kernel can be protected by PaX/Grsecurity. Most of work has done in May 28 2015.
