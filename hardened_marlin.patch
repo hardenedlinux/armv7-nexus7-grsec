@@ -1,0 +1,762 @@
+diff --git a/arch/Kconfig b/arch/Kconfig
+index f5d48d8..be4e2a1 100644
+--- a/arch/Kconfig
++++ b/arch/Kconfig
+@@ -411,6 +411,7 @@ config CC_STACKPROTECTOR_STRONG
+ 
+ endchoice
+ 
++
+ config HAVE_CONTEXT_TRACKING
+ 	bool
+ 	help
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index 3080a75..600c7ab 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -42,6 +42,7 @@ config ARM64
+ 	select HARDIRQS_SW_RESEND
+ 	select HAVE_ALIGNED_STRUCT_PAGE if SLUB
+ 	select HAVE_ARCH_AUDITSYSCALL
++	select HAVE_ARCH_HARDENED_USERCOPY
+ 	select HAVE_ARCH_JUMP_LABEL
+ 	select HAVE_ARCH_KASAN if SPARSEMEM_VMEMMAP && !(ARM64_16K_PAGES && ARM64_VA_BITS_48)
+ 	select HAVE_ARCH_KGDB
+diff --git a/arch/arm64/include/asm/memory.h b/arch/arm64/include/asm/memory.h
+index e4a2ef9..32d2955 100644
+--- a/arch/arm64/include/asm/memory.h
++++ b/arch/arm64/include/asm/memory.h
+@@ -147,7 +147,12 @@ static inline void *phys_to_virt(phys_addr_t x)
+ #define ARCH_PFN_OFFSET		((unsigned long)PHYS_PFN_OFFSET)
+ 
+ #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
+-#define	virt_addr_valid(kaddr)	pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
++
++#define _virt_addr_valid(kaddr)        pfn_valid(__pa(kaddr) >> PAGE_SHIFT)
++
++#define _virt_addr_is_linear(kaddr)    (((u64)(kaddr)) >= PAGE_OFFSET)
++#define virt_addr_valid(kaddr)         (_virt_addr_is_linear(kaddr) && \
++					_virt_addr_valid(kaddr))
+ 
+ #endif
+ 
+diff --git a/arch/arm64/include/asm/uaccess.h b/arch/arm64/include/asm/uaccess.h
+index cb8dab4..c5a68f0 100644
+--- a/arch/arm64/include/asm/uaccess.h
++++ b/arch/arm64/include/asm/uaccess.h
+@@ -247,24 +247,41 @@ do {									\
+ 		-EFAULT;						\
+ })
+ 
+-extern unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n);
+-extern unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n);
++extern unsigned long __must_check __arch_copy_from_user(void *to, const void __user *from, unsigned long n);
++extern unsigned long __must_check __arch_copy_to_user(void __user *to, const void *from, unsigned long n);
+ extern unsigned long __must_check __copy_in_user(void __user *to, const void __user *from, unsigned long n);
+ extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
+ 
++static inline unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n)
++{
++       check_object_size(to, n, false);
++       return __arch_copy_from_user(to, from, n);
++}
++
++static inline unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++       check_object_size(from, n, true);
++       return __arch_copy_to_user(to, from, n);
++}
++
++
+ static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+-	if (access_ok(VERIFY_READ, from, n))
+-		n = __copy_from_user(to, from, n);
+-	else /* security hole - plug it */
++       if (access_ok(VERIFY_READ, from, n)) {
++               check_object_size(to, n, false);
++               n = __arch_copy_from_user(to, from, n);
++       } else /* security hole - plug it */
+ 		memset(to, 0, n);
+ 	return n;
+ }
+ 
+ static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+-	if (access_ok(VERIFY_WRITE, to, n))
+-		n = __copy_to_user(to, from, n);
++       if (access_ok(VERIFY_WRITE, to, n)) {
++               check_object_size(from, n, true);
++               n = __arch_copy_to_user(to, from, n);
++       }
++
+ 	return n;
+ }
+ 
+diff --git a/arch/arm64/kernel/arm64ksyms.c b/arch/arm64/kernel/arm64ksyms.c
+index 8c50178..65919bf 100644
+--- a/arch/arm64/kernel/arm64ksyms.c
++++ b/arch/arm64/kernel/arm64ksyms.c
+@@ -34,8 +34,8 @@ EXPORT_SYMBOL(copy_page);
+ EXPORT_SYMBOL(clear_page);
+ 
+ 	/* user mem (segment) */
+-EXPORT_SYMBOL(__copy_from_user);
+-EXPORT_SYMBOL(__copy_to_user);
++EXPORT_SYMBOL(__arch_copy_from_user);
++EXPORT_SYMBOL(__arch_copy_to_user);
+ EXPORT_SYMBOL(__clear_user);
+ EXPORT_SYMBOL(__copy_in_user);
+ 
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+index e2c6215..880b0f6 100644
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -360,7 +360,7 @@ static void __init request_standard_resources(void)
+ 	struct resource *res;
+ 
+ 	kernel_code.start   = virt_to_phys(_text);
+-	kernel_code.end     = virt_to_phys(_etext - 1);
++	kernel_code.end = virt_to_phys(__init_begin - 1);
+ 	kernel_data.start   = virt_to_phys(_sdata);
+ 	kernel_data.end     = virt_to_phys(_end - 1);
+ 
+diff --git a/arch/arm64/kernel/vdso/vdso.S b/arch/arm64/kernel/vdso/vdso.S
+index 60c1db5..82379a7 100644
+--- a/arch/arm64/kernel/vdso/vdso.S
++++ b/arch/arm64/kernel/vdso/vdso.S
+@@ -21,9 +21,8 @@
+ #include <linux/const.h>
+ #include <asm/page.h>
+ 
+-	__PAGE_ALIGNED_DATA
+-
+ 	.globl vdso_start, vdso_end
++	.section .rodata
+ 	.balign PAGE_SIZE
+ vdso_start:
+ 	.incbin "arch/arm64/kernel/vdso/vdso.so"
+diff --git a/arch/arm64/kernel/vmlinux.lds.S b/arch/arm64/kernel/vmlinux.lds.S
+index b185d96..39aa928 100644
+--- a/arch/arm64/kernel/vmlinux.lds.S
++++ b/arch/arm64/kernel/vmlinux.lds.S
+@@ -103,11 +103,12 @@ SECTIONS
+ 	}
+ 
+ 	ALIGN_DEBUG_RO
+-	RO_DATA(PAGE_SIZE)
+-	EXCEPTION_TABLE(8)
++	_etext = .;			/* End of text section */
++
++	RO_DATA(PAGE_SIZE)		/* everything from this point to     */
++	EXCEPTION_TABLE(8)		/* __init_begin will be marked RO NX */
+ 	NOTES
+ 	ALIGN_DEBUG_RO
+-	_etext = .;			/* End of text and rodata section */
+ 
+ 	ALIGN_DEBUG_RO_MIN(PAGE_SIZE)
+ 	__init_begin = .;
+diff --git a/arch/arm64/lib/copy_from_user.S b/arch/arm64/lib/copy_from_user.S
+index 1be9ef2..d27f859 100644
+--- a/arch/arm64/lib/copy_from_user.S
++++ b/arch/arm64/lib/copy_from_user.S
+@@ -31,7 +31,7 @@
+  * Returns:
+  *	x0 - bytes not copied
+  */
+-ENTRY(__copy_from_user)
++ENTRY(__arch_copy_from_user)
+ ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(0)), ARM64_HAS_PAN, \
+ 	    CONFIG_ARM64_PAN)
+ 	add	x5, x1, x2			// upper user buffer boundary
+@@ -65,7 +65,7 @@ USER(9f, ldrb	w3, [x1]	)
+ ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(1)), ARM64_HAS_PAN, \
+ 	    CONFIG_ARM64_PAN)
+ 	ret
+-ENDPROC(__copy_from_user)
++ENDPROC(__arch_copy_from_user)
+ 
+ 	.section .fixup,"ax"
+ 	.align	2
+diff --git a/arch/arm64/lib/copy_to_user.S b/arch/arm64/lib/copy_to_user.S
+index a257b47..b6dbe15 100644
+--- a/arch/arm64/lib/copy_to_user.S
++++ b/arch/arm64/lib/copy_to_user.S
+@@ -31,7 +31,7 @@
+  * Returns:
+  *	x0 - bytes not copied
+  */
+-ENTRY(__copy_to_user)
++ENTRY(__arch_copy_to_user)
+ ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(0)), ARM64_HAS_PAN, \
+ 	    CONFIG_ARM64_PAN)
+ 	add	x5, x0, x2			// upper user buffer boundary
+@@ -65,7 +65,7 @@ USER(9f, strb	w3, [x0]	)
+ ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(1)), ARM64_HAS_PAN, \
+ 	    CONFIG_ARM64_PAN)
+ 	ret
+-ENDPROC(__copy_to_user)
++ENDPROC(__arch_copy_to_user)
+ 
+ 	.section .fixup,"ax"
+ 	.align	2
+diff --git a/arch/arm64/mm/mmu.c b/arch/arm64/mm/mmu.c
+index a606027..c3b7399 100644
+--- a/arch/arm64/mm/mmu.c
++++ b/arch/arm64/mm/mmu.c
+@@ -641,7 +641,7 @@ void __init fixup_executable(void)
+ void mark_rodata_ro(void)
+ {
+ 	create_mapping_late(__pa(_stext), (unsigned long)_stext,
+-				(unsigned long)_etext - (unsigned long)_stext,
++				(unsigned long)__init_begin - (unsigned long)_stext,
+ 				PAGE_KERNEL_EXEC | PTE_RDONLY);
+ 
+ }
+diff --git a/fs/proc/kcore.c b/fs/proc/kcore.c
+index 91a4e642..e8f7d14 100644
+--- a/fs/proc/kcore.c
++++ b/fs/proc/kcore.c
+@@ -430,6 +430,7 @@ static void elf_kcore_store_hdr(char *bufp, int nphdr, int dataoff)
+ static ssize_t
+ read_kcore(struct file *file, char __user *buffer, size_t buflen, loff_t *fpos)
+ {
++	char *buf = file->private_data;
+ 	ssize_t acc = 0;
+ 	size_t size, tsz;
+ 	size_t elf_buflen;
+@@ -500,23 +501,22 @@ read_kcore(struct file *file, char __user *buffer, size_t buflen, loff_t *fpos)
+ 			if (clear_user(buffer, tsz))
+ 				return -EFAULT;
+ 		} else if (is_vmalloc_or_module_addr((void *)start)) {
+-			char * elf_buf;
++			vread(buf, (char *)start, tsz);
+ 
+-			elf_buf = kzalloc(tsz, GFP_KERNEL);
+-			if (!elf_buf)
+-				return -ENOMEM;
+-			vread(elf_buf, (char *)start, tsz);
+ 			/* we have to zero-fill user buffer even if no read */
+-			if (copy_to_user(buffer, elf_buf, tsz)) {
+-				kfree(elf_buf);
++			if (copy_to_user(buffer, buf, tsz))
+ 				return -EFAULT;
+-			}
+-			kfree(elf_buf);
+ 		} else {
+ 			if (kern_addr_valid(start)) {
+ 				unsigned long n;
+ 
+-				n = copy_to_user(buffer, (char *)start, tsz);
++                               /*
++                                * Using bounce buffer to bypass the
++                                * hardened user copy kernel text checks.
++                                */
++                               memcpy(buf, (char *) start, tsz);
++                               n = copy_to_user(buffer, buf, tsz);
++
+ 				/*
+ 				 * We cannot distinguish between fault on source
+ 				 * and fault on destination. When this happens
+@@ -549,6 +549,11 @@ static int open_kcore(struct inode *inode, struct file *filp)
+ {
+ 	if (!capable(CAP_SYS_RAWIO))
+ 		return -EPERM;
++
++       filp->private_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
++       if (!filp->private_data)
++               return -ENOMEM;
++
+ 	if (kcore_need_update)
+ 		kcore_update_ram();
+ 	if (i_size_read(inode) != proc_root_kcore->size) {
+@@ -559,10 +564,17 @@ static int open_kcore(struct inode *inode, struct file *filp)
+ 	return 0;
+ }
+ 
++static int release_kcore(struct inode *inode, struct file *file)
++{
++       kfree(file->private_data);
++       return 0;
++}
++
+ 
+ static const struct file_operations proc_kcore_operations = {
+ 	.read		= read_kcore,
+ 	.open		= open_kcore,
++	.release        = release_kcore,
+ 	.llseek		= default_llseek,
+ };
+ 
+diff --git a/include/linux/mmzone.h b/include/linux/mmzone.h
+index b101221..53addda 100644
+--- a/include/linux/mmzone.h
++++ b/include/linux/mmzone.h
+@@ -74,10 +74,12 @@ extern int *get_migratetype_fallbacks(int mtype);
+ #ifdef CONFIG_CMA
+ bool is_cma_pageblock(struct page *page);
+ #  define is_migrate_cma(migratetype) unlikely((migratetype) == MIGRATE_CMA)
++# define is_migrate_cma_page(_page) (get_pageblock_migratetype(_page) == MIGRATE_CMA)
+ #  define get_cma_migrate_type() MIGRATE_CMA
+ #else
+ #  define is_cma_pageblock(page) false
+ #  define is_migrate_cma(migratetype) false
++# define is_migrate_cma_page(_page) false
+ #  define get_cma_migrate_type() MIGRATE_MOVABLE
+ #endif
+ 
+diff --git a/include/linux/slab.h b/include/linux/slab.h
+index 5f97037..899d13e 100644
+--- a/include/linux/slab.h
++++ b/include/linux/slab.h
+@@ -146,6 +146,18 @@ void kfree(const void *);
+ void kzfree(const void *);
+ size_t ksize(const void *);
+ 
++#ifdef CONFIG_HAVE_HARDENED_USERCOPY_ALLOCATOR
++const char *__check_heap_object(const void *ptr, unsigned long n,
++				struct page *page);
++#else
++static inline const char *__check_heap_object(const void *ptr,
++					      unsigned long n,
++					      struct page *page)
++{
++	return NULL;
++}
++#endif
++
+ /*
+  * Some archs want to perform DMA into kmalloc caches and need a guaranteed
+  * alignment larger than the alignment of a 64-bit integer.
+diff --git a/include/linux/slub_def.h b/include/linux/slub_def.h
+index e565d7c..944eff1 100644
+--- a/include/linux/slub_def.h
++++ b/include/linux/slub_def.h
+@@ -81,6 +81,7 @@ struct kmem_cache {
+ 	int reserved;		/* Reserved bytes at the end of slabs */
+ 	const char *name;	/* Name (only for display!) */
+ 	struct list_head list;	/* List of slab caches */
++	int red_left_pad;       /* Left redzone padding size */
+ #ifdef CONFIG_SYSFS
+ 	struct kobject kobj;	/* For sysfs */
+ #endif
+diff --git a/include/linux/thread_info.h b/include/linux/thread_info.h
+index ff307b5..be0a0c4 100644
+--- a/include/linux/thread_info.h
++++ b/include/linux/thread_info.h
+@@ -145,6 +145,31 @@ static inline bool test_and_clear_restore_sigmask(void)
+ #error "no set_restore_sigmask() provided and default one won't work"
+ #endif
+ 
++#ifndef CONFIG_HAVE_ARCH_WITHIN_STACK_FRAMES
++static inline int arch_within_stack_frames(const void * const stack,
++                                           const void * const stackend,
++                                           const void *obj, unsigned long len)
++{
++        return 0;
++}
++#endif
++
++#ifdef CONFIG_HARDENED_USERCOPY
++extern void __check_object_size(const void *ptr, unsigned long n,
++                                       bool to_user);
++
++static __always_inline void check_object_size(const void *ptr, unsigned long n,
++					      bool to_user)
++{
++	if (!__builtin_constant_p(n))
++		__check_object_size(ptr, n, to_user);
++}
++#else
++static inline void check_object_size(const void *ptr, unsigned long n,
++                                    bool to_user)
++{ }
++#endif /* CONFIG_HARDENED_USERCOPY */
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
+diff --git a/init/Kconfig b/init/Kconfig
+index e6df41e..7465fbb 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1737,6 +1737,7 @@ choice
+ 
+ config SLAB
+ 	bool "SLAB"
++	select HAVE_HARDENED_USERCOPY_ALLOCATOR
+ 	help
+ 	  The regular slab allocator that is established and known to work
+ 	  well in all environments. It organizes cache hot objects in
+@@ -1744,6 +1745,7 @@ config SLAB
+ 
+ config SLUB
+ 	bool "SLUB (Unqueued Allocator)"
++	select HAVE_HARDENED_USERCOPY_ALLOCATOR
+ 	help
+ 	   SLUB is a slab allocator that minimizes cache line usage
+ 	   instead of managing queues of cached objects (SLAB approach).
+diff --git a/mm/Makefile b/mm/Makefile
+index 3e0a5ab..459c1bf 100644
+--- a/mm/Makefile
++++ b/mm/Makefile
+@@ -20,6 +20,9 @@ KCOV_INSTRUMENT_memcontrol.o := n
+ KCOV_INSTRUMENT_mmzone.o := n
+ KCOV_INSTRUMENT_vmstat.o := n
+ 
++# Since __builtin_frame_address does work as used, disable the warning.
++CFLAGS_usercopy.o += $(call cc-disable-warning, frame-address)
++
+ mmu-y			:= nommu.o
+ mmu-$(CONFIG_MMU)	:= fremap.o gup.o highmem.o memory.o mincore.o \
+ 			   mlock.o mmap.o mprotect.o mremap.o msync.o rmap.o \
+@@ -94,3 +97,4 @@ obj-$(CONFIG_CMA)	+= cma.o
+ obj-$(CONFIG_MEMORY_BALLOON) += balloon_compaction.o
+ obj-$(CONFIG_PROCESS_RECLAIM)	+= process_reclaim.o
+ obj-$(CONFIG_CMA_DEBUGFS) += cma_debug.o
++obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
+diff --git a/mm/slab.c b/mm/slab.c
+index b7f9f64..918ffe2 100644
+--- a/mm/slab.c
++++ b/mm/slab.c
+@@ -4214,6 +4214,36 @@ static int __init slab_proc_init(void)
+ module_init(slab_proc_init);
+ #endif
+ 
++#ifdef CONFIG_HARDENED_USERCOPY
++/*
++ * Rejects objects that are incorrectly sized.
++ *
++ * Returns NULL if check passes, otherwise const char * to name of cache
++ * to indicate an error.
++ */
++const char *__check_heap_object(const void *ptr, unsigned long n,
++				struct page *page)
++{
++	struct kmem_cache *cachep;
++	unsigned int objnr;
++	unsigned long offset;
++
++	/* Find and validate object. */
++	cachep = page->slab_cache;
++	objnr = obj_to_index(cachep, page, (void *)ptr);
++	BUG_ON(objnr >= cachep->num);
++
++	/* Find offset within object. */
++	offset = ptr - index_to_obj(cachep, page, objnr) - obj_offset(cachep);
++
++	/* Allow address range falling entirely within object size. */
++	if (offset <= cachep->object_size && n <= cachep->object_size - offset)
++		return NULL;
++
++	return cachep->name;
++}
++#endif /* CONFIG_HARDENED_USERCOPY */
++
+ /**
+  * ksize - get the actual amount of memory allocated for a given object
+  * @objp: Pointer to the object
+diff --git a/mm/slub.c b/mm/slub.c
+index bbfbf3d..70a8cbe 100644
+--- a/mm/slub.c
++++ b/mm/slub.c
+@@ -124,6 +124,14 @@ static inline int kmem_cache_debug(struct kmem_cache *s)
+ #endif
+ }
+ 
++static inline void *fixup_red_left(struct kmem_cache *s, void *p)
++{
++       if (kmem_cache_debug(s) && s->flags & SLAB_RED_ZONE)
++               p += s->red_left_pad;
++
++       return p;
++}
++
+ static inline bool kmem_cache_has_cpu_partial(struct kmem_cache *s)
+ {
+ #ifdef CONFIG_SLUB_CPU_PARTIAL
+@@ -224,24 +232,6 @@ static inline void stat(const struct kmem_cache *s, enum stat_item si)
+  * 			Core slab cache functions
+  *******************************************************************/
+ 
+-/* Verify that a pointer has an address that is valid within a slab page */
+-static inline int check_valid_pointer(struct kmem_cache *s,
+-				struct page *page, const void *object)
+-{
+-	void *base;
+-
+-	if (!object)
+-		return 1;
+-
+-	base = page_address(page);
+-	if (object < base || object >= base + page->objects * s->size ||
+-		(object - base) % s->size) {
+-		return 0;
+-	}
+-
+-	return 1;
+-}
+-
+ static inline void *get_freepointer(struct kmem_cache *s, void *object)
+ {
+ 	return *(void **)(object + s->offset);
+@@ -271,12 +261,15 @@ static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
+ 
+ /* Loop over all objects in a slab */
+ #define for_each_object(__p, __s, __addr, __objects) \
+-	for (__p = (__addr); __p < (__addr) + (__objects) * (__s)->size;\
+-			__p += (__s)->size)
++	for (__p = fixup_red_left(__s, __addr); \
++		__p < (__addr) + (__objects) * (__s)->size; \
++		__p += (__s)->size)
+ 
+ #define for_each_object_idx(__p, __idx, __s, __addr, __objects) \
+-	for (__p = (__addr), __idx = 1; __idx <= __objects;\
+-			__p += (__s)->size, __idx++)
++	for (__p = fixup_red_left(__s, __addr), __idx = 1; \
++		__idx <= __objects; \
++		__p += (__s)->size, __idx++)
++
+ 
+ /* Determine object index from a given position */
+ static inline int slab_index(void *p, struct kmem_cache *s, void *addr)
+@@ -456,6 +449,23 @@ static void get_map(struct kmem_cache *s, struct page *page, unsigned long *map)
+ 		set_bit(slab_index(p, s, addr), map);
+ }
+ 
++static inline int size_from_object(struct kmem_cache *s)
++{
++       if (s->flags & SLAB_RED_ZONE)
++               return s->size - s->red_left_pad;
++
++       return s->size;
++}
++
++static inline void *restore_red_left(struct kmem_cache *s, void *p)
++{
++       if (s->flags & SLAB_RED_ZONE)
++               p -= s->red_left_pad;
++
++       return p;
++}
++
++
+ /*
+  * Debug settings:
+  */
+@@ -489,6 +499,27 @@ static inline void metadata_access_disable(void)
+ /*
+  * Object debugging
+  */
++
++/* Verify that a pointer has an address that is valid within a slab page */
++static inline int check_valid_pointer(struct kmem_cache *s,
++                               struct page *page, void *object)
++{
++       void *base;
++
++       if (!object)
++               return 1;
++
++       base = page_address(page);
++       object = restore_red_left(s, object);
++       if (object < base || object >= base + page->objects * s->size ||
++               (object - base) % s->size) {
++               return 0;
++       }
++
++       return 1;
++}
++
++
+ static void print_section(char *text, u8 *addr, unsigned int length)
+ {
+ 	metadata_access_enable();
+@@ -628,7 +659,9 @@ static void print_trailer(struct kmem_cache *s, struct page *page, u8 *p)
+ 	pr_err("INFO: Object 0x%p @offset=%tu fp=0x%p\n\n",
+ 	       p, p - addr, get_freepointer(s, p));
+ 
+-	if (p > addr + 16)
++       if (s->flags & SLAB_RED_ZONE)
++               print_section("Redzone ", p - s->red_left_pad, s->red_left_pad);
++       else if (p > addr + 16)
+ 		print_section("Bytes b4 ", p - 16, 16);
+ 
+ 	print_section("Object ", p, min_t(unsigned long, s->object_size,
+@@ -645,9 +678,9 @@ static void print_trailer(struct kmem_cache *s, struct page *page, u8 *p)
+ 	if (s->flags & SLAB_STORE_USER)
+ 		off += 2 * sizeof(struct track);
+ 
+-	if (off != s->size)
++	if (off != size_from_object(s))
+ 		/* Beginning of the filler is the free pointer */
+-		print_section("Padding ", p + off, s->size - off);
++		print_section("Padding ", p + off, size_from_object(s) - off);
+ 
+ 	dump_stack();
+ }
+@@ -688,6 +721,9 @@ static void init_object(struct kmem_cache *s, void *object, u8 val)
+ {
+ 	u8 *p = object;
+ 
++       if (s->flags & SLAB_RED_ZONE)
++               memset(p - s->red_left_pad, val, s->red_left_pad);
++
+ 	if (s->flags & __OBJECT_POISON) {
+ 		memset(p, POISON_FREE, s->object_size - 1);
+ 		p[s->object_size - 1] = POISON_END;
+@@ -781,11 +817,11 @@ static int check_pad_bytes(struct kmem_cache *s, struct page *page, u8 *p)
+ 		/* We also have user information there */
+ 		off += 2 * sizeof(struct track);
+ 
+-	if (s->size == off)
++	if (size_from_object(s) == off)
+ 		return 1;
+ 
+ 	return check_bytes_and_report(s, page, p, "Object padding",
+-				p + off, POISON_INUSE, s->size - off);
++			p + off, POISON_INUSE, size_from_object(s) - off);
+ }
+ 
+ /* Check the pad bytes at the end of a slab page */
+@@ -830,6 +866,10 @@ static int check_object(struct kmem_cache *s, struct page *page,
+ 
+ 	if (s->flags & SLAB_RED_ZONE) {
+ 		if (!check_bytes_and_report(s, page, object, "Redzone",
++                       object - s->red_left_pad, val, s->red_left_pad))
++                       return 0;
++
++               if (!check_bytes_and_report(s, page, object, "Redzone",
+ 			endobject, val, s->inuse - s->object_size))
+ 			return 0;
+ 	} else {
+@@ -1455,7 +1495,7 @@ static struct page *new_slab(struct kmem_cache *s, gfp_t flags, int node)
+ 			set_freepointer(s, p, NULL);
+ 	}
+ 
+-	page->freelist = start;
++	page->freelist = fixup_red_left(s, start);
+ 	page->inuse = page->objects;
+ 	page->frozen = 1;
+ out:
+@@ -3059,7 +3099,7 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
+ 		 */
+ 		size += 2 * sizeof(struct track);
+ 
+-	if (flags & SLAB_RED_ZONE)
++		if (flags & SLAB_RED_ZONE) {
+ 		/*
+ 		 * Add some empty padding so that we can catch
+ 		 * overwrites from earlier objects rather than let
+@@ -3068,6 +3108,12 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
+ 		 * of the object.
+ 		 */
+ 		size += sizeof(void *);
++
++               s->red_left_pad = sizeof(void *);
++               s->red_left_pad = ALIGN(s->red_left_pad, s->align);
++               size += s->red_left_pad;
++       }
++
+ #endif
+ 
+ 	/*
+@@ -3361,6 +3407,46 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
+ EXPORT_SYMBOL(__kmalloc_node);
+ #endif
+ 
++#ifdef CONFIG_HARDENED_USERCOPY
++/*
++ * Rejects objects that are incorrectly sized.
++ *
++ * Returns NULL if check passes, otherwise const char * to name of cache
++ * to indicate an error.
++ */
++const char *__check_heap_object(const void *ptr, unsigned long n,
++				struct page *page)
++{
++	struct kmem_cache *s;
++	unsigned long offset;
++	size_t object_size;
++
++	/* Find object and usable object size. */
++	s = page->slab_cache;
++	object_size = slab_ksize(s);
++
++	/* Reject impossible pointers. */
++	if (ptr < page_address(page))
++		return s->name;
++
++	/* Find offset within object. */
++	offset = (ptr - page_address(page)) % s->size;
++
++	/* Adjust for redzone and reject if within the redzone. */
++	if (kmem_cache_debug(s) && s->flags & SLAB_RED_ZONE) {
++		if (offset < s->red_left_pad)
++			return s->name;
++		offset -= s->red_left_pad;
++	}
++
++	/* Allow address range falling entirely within object size. */
++	if (offset <= object_size && n <= object_size - offset)
++		return NULL;
++
++	return s->name;
++}
++#endif /* CONFIG_HARDENED_USERCOPY */
++
+ static size_t __ksize(const void *object)
+ {
+ 	struct page *page;
+diff --git a/security/Kconfig b/security/Kconfig
+index 263e25b..014ffa5 100644
+--- a/security/Kconfig
++++ b/security/Kconfig
+@@ -131,6 +131,47 @@ config LSM_MMAP_MIN_ADDR
+ 	  this low address space will need the permission specific to the
+ 	  systems running LSM.
+ 
++config HAVE_HARDENED_USERCOPY_ALLOCATOR
++	bool
++	help
++	  The heap allocator implements __check_heap_object() for
++	  validating memory ranges against heap object sizes in
++	  support of CONFIG_HARDENED_USERCOPY.
++
++config HAVE_ARCH_HARDENED_USERCOPY
++	bool
++	help
++	  The architecture supports CONFIG_HARDENED_USERCOPY by
++	  calling check_object_size() just before performing the
++	  userspace copies in the low level implementation of
++	  copy_to_user() and copy_from_user().
++
++config HARDENED_USERCOPY
++	bool "Harden memory copies between kernel and userspace"
++	depends on HAVE_ARCH_HARDENED_USERCOPY
++	depends on HAVE_HARDENED_USERCOPY_ALLOCATOR
++	select BUG
++	help
++	  This option checks for obviously wrong memory regions when
++	  copying memory to/from the kernel (via copy_to_user() and
++	  copy_from_user() functions) by rejecting memory ranges that
++	  are larger than the specified heap object, span multiple
++	  separately allocates pages, are not on the process stack,
++	  or are part of the kernel text. This kills entire classes
++	  of heap overflow exploits and similar kernel memory exposures.
++
++
++config HARDENED_USERCOPY_PAGESPAN
++	bool "Refuse to copy allocations that span multiple pages"
++	depends on HARDENED_USERCOPY
++	depends on !COMPILE_TEST
++	help
++	  When a multi-page allocation is done without __GFP_COMP,
++	  hardened usercopy will reject attempts to copy it. There are,
++	  however, several cases of this in the kernel that have not all
++	  been removed. This config is intended to be used only while
++	  trying to find such users.
++
+ source security/selinux/Kconfig
+ source security/smack/Kconfig
+ source security/tomoyo/Kconfig
