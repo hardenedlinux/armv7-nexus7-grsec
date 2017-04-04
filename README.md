@@ -23,6 +23,9 @@ marlin( Pixel XL)
 - [Android 7.1.1](https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/nougat-release.tar.gz)
 - [msm-marlin-3.18-nougat](https://android.googlesource.com/kernel/msm/+/android-msm-marlin-3.18-nougat-mr1.3)
 
+Notes: The combination of PXN( inspired by PaX's KERNEXEC), HARDENED_USERCOPY( implemented and ported from PaX/Grsecurity's PAX_USERCOPY partially), RO vdso, DEBUG_RODATA/STRICT_MEMORY_RWX( it originally implemented by PaX's KERNEXEC) is unlikely to defeat highly customized exploitation( even some exploit vectors, which old dudes forgot already and new dudes never know) but it's strong enough to defeat those easy-to-write exploits uased by malwares, which might cause massive affection.
+
+
 Write-up:
  * [Linux kernel mitigation checklist](https://hardenedlinux.github.io/system-security/2016/12/13/kernel_mitigation_checklist.html)
  * [How can we "hardened" an Android eco-system without Google?](http://citypw.blogspot.ca/2016/08/how-can-we-hardened-android-eco-system.html)
