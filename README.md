@@ -9,7 +9,7 @@ Copyright (c) TYA infotech ltd http://tya.company/
 
 # [PoC: PaX for Android](https://github.com/hardenedlinux/armv7-nexus7-grsec)
 
-This project is a PoC to proved Android kernel can be protected by PaX/Grsecurity. Most of work has done in May 28 2015.
+This project is a PoC to proved Android kernel can be protected by PaX/Grsecurity. Most of work( hardened-flo) has done in May 28 2015.
 
 Testing environment:
 
@@ -23,7 +23,7 @@ marlin( Pixel XL)
 - [Android 7.1.1](https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/nougat-release.tar.gz)
 - [msm-marlin-3.18-nougat](https://android.googlesource.com/kernel/msm/+/android-msm-marlin-3.18-nougat-mr1.3)
 
-Notes: The combination of PXN( inspired by PaX's KERNEXEC), HARDENED_USERCOPY( implemented and ported from PaX/Grsecurity's PAX_USERCOPY partially), RO vdso, DEBUG_RODATA/STRICT_MEMORY_RWX( it originally implemented by PaX's KERNEXEC) is unlikely to defeat highly customized exploitation( even some exploit vectors, which old dudes forgot already and new dudes never know) but it's strong enough to defeat those easy-to-write exploits uased by malwares, which might cause massive affection.
+Notes: The combination of PXN( inspired by PaX's KERNEXEC), HARDENED_USERCOPY( implemented and ported from PaX/Grsecurity's PAX_USERCOPY partially), RO vdso, DEBUG_RODATA/STRICT_MEMORY_RWX( it originally implemented by PaX's KERNEXEC) and software-based PAN( not strong as PaX's UDEREF) is unlikely to defeat highly customized exploitation( even some exploit vectors, which old dudes forgot already and new dudes never know) but it's strong enough to defeat those easy-to-write exploits used by malwares, which might cause massive affection. 
 
 
 Write-up:
