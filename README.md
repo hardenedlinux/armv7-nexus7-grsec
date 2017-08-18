@@ -19,8 +19,8 @@ flo( Nexus 7 2017)
 - [msm-flo-kit](https://android.googlesource.com/kernel/msm/+/android-msm-flo-3.4-kitkat-mr2)
 
 marlin( Pixel XL)
-- [nougat aarch64 toolchain)(https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/nougat-release.tar.gz)
-- [Android 7.1.1](https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/nougat-release.tar.gz)
+- [nougat aarch64 toolchain](https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/nougat-release.tar.gz)
+- [Android 7.1.1](https://dl.google.com/dl/android/aosp/marlin-nof26v-factory-1dce14a1.zip)
 - [msm-marlin-3.18-nougat](https://android.googlesource.com/kernel/msm/+/android-msm-marlin-3.18-nougat-mr1.3)
 
 Notes: The combination of PXN( inspired by PaX's KERNEXEC), HARDENED_USERCOPY( implemented and ported from PaX/Grsecurity's PAX_USERCOPY partially), RO vdso, DEBUG_RODATA/STRICT_MEMORY_RWX( it originally implemented by PaX's KERNEXEC) and software-based PAN( not strong as PaX's UDEREF) is unlikely to defeat highly customized exploitation( even some exploit vectors, which old dudes forgot already and new dudes never know) but it's strong enough to defeat those easy-to-write exploits used by malwares, which might cause massive affection. 
