@@ -4795,7 +4795,7 @@ index f6ae2b2..b03ffc7 100644
  				    SRMMU_DIRTY | SRMMU_REF)
  
 diff --git a/arch/sparc/include/asm/spinlock_64.h b/arch/sparc/include/asm/spinlock_64.h
-index 9689176..63c18ea 100644
+index 96891769..63c18ea 100644
 --- a/arch/sparc/include/asm/spinlock_64.h
 +++ b/arch/sparc/include/asm/spinlock_64.h
 @@ -92,14 +92,19 @@ static inline void arch_spin_lock_flags(arch_spinlock_t *lock, unsigned long fla
@@ -30484,7 +30484,7 @@ index 73d4531..c90cd2d 100644
  	priv = netdev_priv(dev);
  	priv->phy = phy;
 diff --git a/drivers/infiniband/core/cm.c b/drivers/infiniband/core/cm.c
-index c889aae..6cf5aa7 100644
+index c889aaef..6cf5aa7 100644
 --- a/drivers/infiniband/core/cm.c
 +++ b/drivers/infiniband/core/cm.c
 @@ -114,7 +114,7 @@ static char const counter_group_names[CM_COUNTER_GROUPS]
@@ -44320,7 +44320,7 @@ index a4c5624..79d6d88 100644
  /** create a directory */
  struct dentry * oprofilefs_mkdir(struct super_block * sb, struct dentry * root,
 diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
-index ddbb6a9..be1680e 100644
+index ddbb6a9..4385a59 100644
 --- a/include/linux/perf_event.h
 +++ b/include/linux/perf_event.h
 @@ -879,8 +879,8 @@ struct perf_event {
@@ -44345,6 +44345,18 @@ index ddbb6a9..be1680e 100644
  
  	/*
  	 * Protect attach/detach and child_list:
+@@ -1248,6 +1248,11 @@ extern int perf_proc_update_handler(struct ctl_table *table, int write,
+ 		void __user *buffer, size_t *lenp,
+ 		loff_t *ppos);
+ 
++static inline bool perf_paranoid_any(void)
++{
++	return sysctl_perf_event_paranoid > 2;
++}
++
+ static inline bool perf_paranoid_tracepoint_raw(void)
+ {
+ 	return sysctl_perf_event_paranoid > -1;
 diff --git a/include/linux/pipe_fs_i.h b/include/linux/pipe_fs_i.h
 index e1ac1ce..0675fed 100644
 --- a/include/linux/pipe_fs_i.h
@@ -46782,10 +46794,24 @@ index 67b847d..93834dd 100644
  #ifdef CONFIG_MODULE_UNLOAD
  		{
 diff --git a/kernel/events/core.c b/kernel/events/core.c
-index aafa4c1..c351b60 100644
+index aafa4c1..9cf052e 100644
 --- a/kernel/events/core.c
 +++ b/kernel/events/core.c
-@@ -181,7 +181,7 @@ int perf_proc_update_handler(struct ctl_table *table, int write,
+@@ -153,8 +153,13 @@ static struct srcu_struct pmus_srcu;
+  *   0 - disallow raw tracepoint access for unpriv
+  *   1 - disallow cpu events for unpriv
+  *   2 - disallow kernel profiling for unpriv
++ *   3 - disallow all unpriv perf event use
+  */
++#ifdef CONFIG_SECURITY_PERF_EVENTS_RESTRICT
++int sysctl_perf_event_paranoid __read_mostly = 3;
++#else
+ int sysctl_perf_event_paranoid __read_mostly = 1;
++#endif
+ 
+ /* Minimum for 512 kiB + 1 user control page */
+ int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
+@@ -181,7 +186,7 @@ int perf_proc_update_handler(struct ctl_table *table, int write,
  	return 0;
  }
  
@@ -46794,7 +46820,7 @@ index aafa4c1..c351b60 100644
  
  static void cpu_ctx_sched_out(struct perf_cpu_context *cpuctx,
  			      enum event_type_t event_type);
-@@ -2659,7 +2659,7 @@ static void __perf_event_read(void *info)
+@@ -2659,7 +2664,7 @@ static void __perf_event_read(void *info)
  
  static inline u64 perf_event_count(struct perf_event *event)
  {
@@ -46803,7 +46829,7 @@ index aafa4c1..c351b60 100644
  }
  
  static u64 perf_event_read(struct perf_event *event)
-@@ -2983,9 +2983,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
+@@ -2983,9 +2988,9 @@ u64 perf_event_read_value(struct perf_event *event, u64 *enabled, u64 *running)
  	mutex_lock(&event->child_mutex);
  	total += perf_event_read(event);
  	*enabled += event->total_time_enabled +
@@ -46815,7 +46841,7 @@ index aafa4c1..c351b60 100644
  
  	list_for_each_entry(child, &event->child_list, child_list) {
  		total += perf_event_read(child);
-@@ -3393,10 +3393,10 @@ void perf_event_update_userpage(struct perf_event *event)
+@@ -3393,10 +3398,10 @@ void perf_event_update_userpage(struct perf_event *event)
  		userpg->offset -= local64_read(&event->hw.prev_count);
  
  	userpg->time_enabled = enabled +
@@ -46828,7 +46854,7 @@ index aafa4c1..c351b60 100644
  
  	arch_perf_update_userpage(userpg, now);
  
-@@ -3829,11 +3829,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
+@@ -3829,11 +3834,11 @@ static void perf_output_read_one(struct perf_output_handle *handle,
  	values[n++] = perf_event_count(event);
  	if (read_format & PERF_FORMAT_TOTAL_TIME_ENABLED) {
  		values[n++] = enabled +
@@ -46842,7 +46868,7 @@ index aafa4c1..c351b60 100644
  	}
  	if (read_format & PERF_FORMAT_ID)
  		values[n++] = primary_event_id(event);
-@@ -4511,12 +4511,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
+@@ -4511,12 +4516,12 @@ static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
  		 * need to add enough zero bytes after the string to handle
  		 * the 64bit alignment we do later.
  		 */
@@ -46857,7 +46883,7 @@ index aafa4c1..c351b60 100644
  		if (IS_ERR(name)) {
  			name = strncpy(tmp, "//toolong", sizeof(tmp));
  			goto got_name;
-@@ -5929,7 +5929,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
+@@ -5929,7 +5934,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
  	event->parent		= parent_event;
  
  	event->ns		= get_pid_ns(current->nsproxy->pid_ns);
@@ -46866,7 +46892,17 @@ index aafa4c1..c351b60 100644
  
  	event->state		= PERF_EVENT_STATE_INACTIVE;
  
-@@ -6491,10 +6491,10 @@ static void sync_child_event(struct perf_event *child_event,
+@@ -6202,6 +6207,9 @@ SYSCALL_DEFINE5(perf_event_open,
+ 	if (flags & ~PERF_FLAG_ALL)
+ 		return -EINVAL;
+ 
++	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
++		return -EACCES;
++
+ 	err = perf_copy_attr(attr_uptr, &attr);
+ 	if (err)
+ 		return err;
+@@ -6491,10 +6499,10 @@ static void sync_child_event(struct perf_event *child_event,
  	/*
  	 * Add back the child's count to the parent's count:
  	 */
@@ -50082,6 +50118,30 @@ index 209b379..7f76423 100644
  				   tsk->comm);
  			put_task_struct(tsk);
  		}
+diff --git a/kernel/user_namespace.c b/kernel/user_namespace.c
+index 3b906e9..49fb482 100644
+--- a/kernel/user_namespace.c
++++ b/kernel/user_namespace.c
+@@ -28,6 +28,19 @@ int create_user_ns(struct cred *new)
+ 	struct user_struct *root_user;
+ 	int n;
+ 
++	/* by PaX/Grsecurity
++	 * This doesn't really inspire confidence:
++	 * http://marc.info/?l=linux-kernel&m=135543612731939&w=2
++	 * http://marc.info/?l=linux-kernel&m=135545831607095&w=2
++	 * Increases kernel attack surface in areas developers
++	 * previously cared little about ("low importance due
++	 * to requiring "root" capability")
++	 * To be removed when this code receives *proper* review
++	 */
++	if (!capable(CAP_SYS_ADMIN) || !capable(CAP_SETUID) ||
++		!capable(CAP_SETGID))
++		return -EPERM;
++
+ 	ns = kmem_cache_alloc(user_ns_cachep, GFP_KERNEL);
+ 	if (!ns)
+ 		return -ENOMEM;
 diff --git a/lib/bitmap.c b/lib/bitmap.c
 index b121ae5..941b69a 100644
 --- a/lib/bitmap.c
@@ -57497,7 +57557,7 @@ index 5c11312..72742b5 100644
      write_hex_cnt = 0;
      for (i = 0; i < logo_clutsize; i++) {
 diff --git a/security/Kconfig b/security/Kconfig
-index ccc61f8..c140672 100644
+index ccc61f8..0b0442f 100644
 --- a/security/Kconfig
 +++ b/security/Kconfig
 @@ -4,6 +4,649 @@
@@ -58150,7 +58210,23 @@ index ccc61f8..c140672 100644
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +812,7 @@ config INTEL_TXT
+@@ -84,6 +727,15 @@ config SECURITY_DMESG_RESTRICT
+ 
+ 	  If you are unsure how to answer this question, answer N.
+ 
++config SECURITY_PERF_EVENTS_RESTRICT
++	bool "Restrict unprivileged use of performance events"
++	depends on PERF_EVENTS
++	help
++	  If you say Y here, the kernel.perf_event_paranoid sysctl
++	  will be set to 3 by default, and no unprivileged use of the
++	  perf_event_open syscall will be permitted unless it is
++	  changed.
++
+ config SECURITY
+ 	bool "Enable different security models"
+ 	depends on SYSFS
+@@ -169,7 +821,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
