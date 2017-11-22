@@ -13,7 +13,7 @@ This project is a PoC to proved Android kernel can be protected by PaX/Grsecurit
 
 Testing environment:
 
-flo( Nexus 7 2017)
+flo( Nexus 7 2013)
 - [Android NDK 9d](http://dl.google.com/android/ndk/android-ndk-r9b-linux-x86.tar.bz2)
 - [Android 4.4](https://dl.google.com/dl/android/aosp/razor-ktu84p-factory-2482a7d5.zip)
 - [msm-flo-kit](https://android.googlesource.com/kernel/msm/+/android-msm-flo-3.4-kitkat-mr2)
